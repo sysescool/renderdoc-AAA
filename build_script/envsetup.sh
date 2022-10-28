@@ -11,6 +11,9 @@ export ANDROID_NDK=''
 # and location is "/usr/lib/x86_64-linux-gnu/qt5/bin/qmake"
 export QT5_QMAKE_EXE=''
 
+# aosp build path
+export AOSP_OUT_PATH=''
+
 # edit yourself proxy
 # for example http_proxy=http://127.0.0.1:7890
 function setproxy(){
