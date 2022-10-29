@@ -1173,9 +1173,8 @@ bool WrappedVulkan::Serialise_vkBeginCommandBuffer(SerialiserType &ser, VkComman
                 GetResID(BeginInfo.pInheritanceInfo->renderPass));
           m_BakedCmdBufferInfo[BakedCommandBuffer].state.subpass =
               BeginInfo.pInheritanceInfo->subpass;
-          if(BeginInfo.pInheritanceInfo->framebuffer != VK_NULL_HANDLE)
-            m_BakedCmdBufferInfo[BakedCommandBuffer].state.SetFramebuffer(
-                this, GetResID(BeginInfo.pInheritanceInfo->framebuffer));
+          // framebuffer is not useful here since it may be incomplete (imageless) and it's
+          // optional, so we should just treat it as never present.
         }
 
         ObjDisp(cmd)->BeginCommandBuffer(Unwrap(cmd), &unwrappedBeginInfo);
@@ -1393,8 +1392,10 @@ bool WrappedVulkan::Serialise_vkEndCommandBuffer(SerialiserType &ser, VkCommandB
         }
 
         // finish any render pass that was still active in the primary partial parent
-        if(m_Partial[Primary].partialParent == BakedCommandBuffer &&
-           m_Partial[Primary].renderPassActive)
+        if((m_Partial[Primary].partialParent == BakedCommandBuffer &&
+            m_Partial[Primary].renderPassActive) ||
+           (m_Partial[Secondary].partialParent == BakedCommandBuffer &&
+            m_Partial[Secondary].renderPassActive))
         {
           if(m_BakedCmdBufferInfo[m_LastCmdBufferID].renderPassOpen)
           {
@@ -1957,6 +1958,11 @@ void WrappedVulkan::vkCmdBeginRenderPass(VkCommandBuffer commandBuffer,
     const VkRenderPassAttachmentBeginInfo *attachmentsInfo =
         (const VkRenderPassAttachmentBeginInfo *)FindNextStruct(
             pRenderPassBegin, VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO);
+
+    // ignore degenerate struct (which is only valid - and indeed required - for a non-imageless
+    // framebuffer)
+    if(attachmentsInfo && attachmentsInfo->attachmentCount == 0)
+      attachmentsInfo = NULL;
 
     for(size_t i = 0; fbInfo->imageAttachments[i].barrier.sType; i++)
     {
@@ -2610,6 +2616,11 @@ void WrappedVulkan::vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer,
     const VkRenderPassAttachmentBeginInfo *attachmentsInfo =
         (const VkRenderPassAttachmentBeginInfo *)FindNextStruct(
             pRenderPassBegin, VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO);
+
+    // ignore degenerate struct (which is only valid - and indeed required - for a non-imageless
+    // framebuffer)
+    if(attachmentsInfo && attachmentsInfo->attachmentCount == 0)
+      attachmentsInfo = NULL;
 
     for(size_t i = 0; fbInfo->imageAttachments[i].barrier.sType; i++)
     {
@@ -5125,7 +5136,8 @@ void WrappedVulkan::ApplyPushDescriptorWrites(VkPipelineBindPoint pipelineBindPo
           curIdx = 0;
         }
 
-        (*bind)[curIdx].texelBufferView = GetResID(writeDesc.pTexelBufferView[d]);
+        (*bind)[curIdx].SetTexelBuffer(writeDesc.descriptorType,
+                                       GetResID(writeDesc.pTexelBufferView[d]));
       }
     }
     else if(writeDesc.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER ||
@@ -5145,19 +5157,8 @@ void WrappedVulkan::ApplyPushDescriptorWrites(VkPipelineBindPoint pipelineBindPo
           curIdx = 0;
         }
 
-        bool sampler = true;
-        bool imageView = true;
-
-        // ignore descriptors not part of the write, as they might not even point to a valid
-        // object so trying to get their ID could crash
-        if(layoutBinding->immutableSampler ||
-           (writeDesc.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLER &&
-            writeDesc.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER))
-          sampler = false;
-        if(writeDesc.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER)
-          imageView = false;
-
-        (*bind)[curIdx].imageInfo.SetFrom(writeDesc.pImageInfo[d], sampler, imageView);
+        (*bind)[curIdx].SetImage(writeDesc.descriptorType, writeDesc.pImageInfo[d],
+                                 layoutBinding->immutableSampler == NULL);
       }
     }
     else if(writeDesc.descriptorType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
@@ -5165,8 +5166,8 @@ void WrappedVulkan::ApplyPushDescriptorWrites(VkPipelineBindPoint pipelineBindPo
       VkWriteDescriptorSetInlineUniformBlock *inlineWrite =
           (VkWriteDescriptorSetInlineUniformBlock *)FindNextStruct(
               &writeDesc, VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK);
-      memcpy(inlineData.data() + (*bind)->inlineOffset + writeDesc.dstArrayElement,
-             inlineWrite->pData, inlineWrite->dataSize);
+      memcpy(inlineData.data() + (*bind)->offset + writeDesc.dstArrayElement, inlineWrite->pData,
+             inlineWrite->dataSize);
     }
     else
     {
@@ -5181,7 +5182,7 @@ void WrappedVulkan::ApplyPushDescriptorWrites(VkPipelineBindPoint pipelineBindPo
           curIdx = 0;
         }
 
-        (*bind)[curIdx].bufferInfo.SetFrom(writeDesc.pBufferInfo[d]);
+        (*bind)[curIdx].SetBuffer(writeDesc.descriptorType, writeDesc.pBufferInfo[d]);
       }
     }
   }
@@ -5414,7 +5415,7 @@ void WrappedVulkan::vkCmdPushDescriptorSetKHR(VkCommandBuffer commandBuffer,
     {
       const VkWriteDescriptorSet &write = pDescriptorWrites[i];
 
-      FrameRefType ref = GetRefType(write.descriptorType);
+      FrameRefType ref = GetRefType(convert(write.descriptorType));
 
       for(uint32_t d = 0; d < write.descriptorCount; d++)
       {
@@ -5620,7 +5621,7 @@ void WrappedVulkan::vkCmdPushDescriptorSetWithTemplateKHR(
       byte *dst = memory + entry.offset;
       const byte *src = (const byte *)pData + entry.offset;
 
-      FrameRefType ref = GetRefType(entry.descriptorType);
+      FrameRefType ref = GetRefType(convert(entry.descriptorType));
 
       if(entry.descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER ||
          entry.descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER)
@@ -6772,9 +6773,13 @@ bool WrappedVulkan::Serialise_vkCmdBeginRendering(SerialiserType &ser, VkCommand
         commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
 
         // only if we're partially recording do we update this state
-        if(ShouldUpdateRenderState(m_LastCmdBufferID, true))
+        if(ShouldUpdateRenderState(m_LastCmdBufferID))
         {
-          m_Partial[Primary].renderPassActive = true;
+          if(m_Partial[Primary].partialParent == m_LastCmdBufferID)
+            m_Partial[Primary].renderPassActive = true;
+          else if(m_Partial[Secondary].partialParent == m_LastCmdBufferID)
+            m_Partial[Secondary].renderPassActive = true;
+
           m_BakedCmdBufferInfo[m_LastCmdBufferID].renderPassOpen = true;
         }
         m_BakedCmdBufferInfo[m_LastCmdBufferID].activeSubpass = 0;
@@ -7136,13 +7141,18 @@ bool WrappedVulkan::Serialise_vkCmdEndRendering(SerialiserType &ser, VkCommandBu
 
         bool suspending = (renderstate.dynamicRendering.flags & VK_RENDERING_SUSPENDING_BIT) != 0;
 
-        if(ShouldUpdateRenderState(m_LastCmdBufferID, true))
+        if(ShouldUpdateRenderState(m_LastCmdBufferID))
         {
           m_BakedCmdBufferInfo[m_LastCmdBufferID].renderPassOpen = false;
 
           // if this rendering is just being suspended, the pass is still active
           if(!suspending)
-            m_Partial[Primary].renderPassActive = false;
+          {
+            if(m_Partial[Primary].partialParent == m_LastCmdBufferID)
+              m_Partial[Primary].renderPassActive = false;
+            else if(m_Partial[Secondary].partialParent == m_LastCmdBufferID)
+              m_Partial[Secondary].renderPassActive = false;
+          }
         }
 
         ActionFlags drawFlags = ActionFlags::PassBoundary | ActionFlags::EndPass;

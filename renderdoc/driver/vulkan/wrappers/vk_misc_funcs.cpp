@@ -58,27 +58,34 @@ static void MakeSubpassLoadRP(RPCreateInfo &info, const RPCreateInfo *origInfo, 
       (const VkRenderPassMultiviewCreateInfo *)FindNextStruct(
           origInfo, VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO);
 
-  static VkRenderPassMultiviewCreateInfo patched;
+  static VkRenderPassMultiviewCreateInfo patchedMultiview;
 
   if(multiview)
   {
     // remove from the chain, the caller ensured we have a mutable chain so we won't be trashing the
     // pNext chain we'll look up for any subsequent subpasses
     RemoveNextStruct(&info, VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO);
-    patched = *multiview;
+    patchedMultiview = *multiview;
 
-    // keep the view mask for our target subpass
-    patched.subpassCount = 1;
-    patched.pViewMasks = patched.pViewMasks + s;
+    if(patchedMultiview.subpassCount > 0)
+    {
+      // keep the view mask for our target subpass
+      patchedMultiview.subpassCount = 1;
+      patchedMultiview.pViewMasks = patchedMultiview.pViewMasks + s;
 
-    // view offsets are not allowed for self-dependencies, and we remove all other dependencies.
-    patched.dependencyCount = 0;
-    patched.pViewOffsets = NULL;
+      // view offsets are not allowed for self-dependencies, and we remove all other dependencies.
+      patchedMultiview.dependencyCount = 0;
+      patchedMultiview.pViewOffsets = NULL;
 
-    // add onto the chain
-    patched.pNext = info.pNext;
-    info.pNext = &patched;
+      // add onto the chain
+      patchedMultiview.pNext = info.pNext;
+      info.pNext = &patchedMultiview;
+    }
   }
+
+  // remove input attachment aspect structure unconditionally rather than patching it, since it is
+  // optional and omitting it only makes invalid behaviour valid
+  RemoveNextStruct(&info, VK_STRUCTURE_TYPE_RENDER_PASS_INPUT_ATTACHMENT_ASPECT_CREATE_INFO);
 
   // remove any non-self dependencies
   info.dependencyCount = 0;
@@ -1021,20 +1028,16 @@ bool WrappedVulkan::Serialise_vkCreateRenderPass(SerialiserType &ser, VkDevice d
       if(m_ReplayOptions.optimisation != ReplayOptimisationLevel::Fastest)
       {
         if(att[i].loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE)
-        {
           att[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        }
+        if(att[i].stencilLoadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+          att[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+
         if(att[i].loadOp == VK_ATTACHMENT_LOAD_OP_LOAD &&
            att[i].initialLayout == VK_IMAGE_LAYOUT_UNDEFINED)
         {
           att[i].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
         }
-        if(att[i].stencilLoadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE)
-        {
-          att[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-          if(att[i].initialLayout == VK_IMAGE_LAYOUT_UNDEFINED)
-            att[i].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
-        }
+
         if(att[i].stencilLoadOp == VK_ATTACHMENT_LOAD_OP_LOAD &&
            att[i].initialLayout == VK_IMAGE_LAYOUT_UNDEFINED)
         {
@@ -1283,6 +1286,26 @@ bool WrappedVulkan::Serialise_vkCreateRenderPass2(SerialiserType &ser, VkDevice 
           att[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         if(att[i].stencilLoadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE)
           att[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+      }
+
+      if(m_ReplayOptions.optimisation != ReplayOptimisationLevel::Fastest)
+      {
+        if(att[i].loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+          att[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        if(att[i].stencilLoadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+          att[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+
+        if(att[i].loadOp == VK_ATTACHMENT_LOAD_OP_LOAD &&
+           att[i].initialLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+        {
+          att[i].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+
+        if(att[i].stencilLoadOp == VK_ATTACHMENT_LOAD_OP_LOAD &&
+           att[i].initialLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+        {
+          att[i].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
       }
 
       // renderpass can't start or end in presentable layout on replay
@@ -1757,15 +1780,6 @@ VkResult WrappedVulkan::vkCreateSamplerYcbcrConversion(
   return ret;
 }
 
-struct UserDebugReportCallbackData
-{
-  VkInstance wrappedInstance;
-  VkDebugReportCallbackCreateInfoEXT createInfo;
-  bool muteWarned;
-
-  VkDebugReportCallbackEXT realObject;
-};
-
 VkBool32 VKAPI_PTR UserDebugReportCallback(VkDebugReportFlagsEXT flags,
                                            VkDebugReportObjectTypeEXT objectType, uint64_t object,
                                            size_t location, int32_t messageCode,
@@ -1808,13 +1822,6 @@ VkBool32 VKAPI_PTR UserDebugReportCallback(VkDebugReportFlagsEXT flags,
   return user->createInfo.pfnCallback(flags, objectType, object, location, messageCode,
                                       pLayerPrefix, pMessage, user->createInfo.pUserData);
 }
-struct UserDebugUtilsCallbackData
-{
-  VkDebugUtilsMessengerCreateInfoEXT createInfo;
-  bool muteWarned;
-
-  VkDebugUtilsMessengerEXT realObject;
-};
 
 VkBool32 VKAPI_PTR UserDebugUtilsCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                                           VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -1891,6 +1898,11 @@ VkResult WrappedVulkan::vkCreateDebugReportCallbackEXT(
     return vkr;
   }
 
+  {
+    SCOPED_LOCK(m_CallbacksLock);
+    m_ReportCallbacks.push_back(user);
+  }
+
   *pCallback = (VkDebugReportCallbackEXT)(uint64_t)user;
 
   return vkr;
@@ -1907,6 +1919,11 @@ void WrappedVulkan::vkDestroyDebugReportCallbackEXT(VkInstance instance,
       (UserDebugReportCallbackData *)(uintptr_t)NON_DISP_TO_UINT64(callback);
 
   ObjDisp(instance)->DestroyDebugReportCallbackEXT(Unwrap(instance), user->realObject, pAllocator);
+
+  {
+    SCOPED_LOCK(m_CallbacksLock);
+    m_ReportCallbacks.removeOne(user);
+  }
 
   delete user;
 }
@@ -2031,6 +2048,8 @@ static ObjData GetObjData(VkObjectType objType, uint64_t object)
     case VK_OBJECT_TYPE_CU_MODULE_NVX:
     case VK_OBJECT_TYPE_CU_FUNCTION_NVX:
     case VK_OBJECT_TYPE_BUFFER_COLLECTION_FUCHSIA:
+    case VK_OBJECT_TYPE_MICROMAP_EXT:
+    case VK_OBJECT_TYPE_OPTICAL_FLOW_SESSION_NV:
     case VK_OBJECT_TYPE_UNKNOWN:
     case VK_OBJECT_TYPE_MAX_ENUM: break;
   }
@@ -2314,6 +2333,11 @@ VkResult WrappedVulkan::vkCreateDebugUtilsMessengerEXT(
     return vkr;
   }
 
+  {
+    SCOPED_LOCK(m_CallbacksLock);
+    m_UtilsCallbacks.push_back(user);
+  }
+
   *pMessenger = (VkDebugUtilsMessengerEXT)(uint64_t)user;
 
   return vkr;
@@ -2330,6 +2354,11 @@ void WrappedVulkan::vkDestroyDebugUtilsMessengerEXT(VkInstance instance,
       (UserDebugUtilsCallbackData *)(uintptr_t)NON_DISP_TO_UINT64(messenger);
 
   ObjDisp(instance)->DestroyDebugUtilsMessengerEXT(Unwrap(instance), user->realObject, pAllocator);
+
+  {
+    SCOPED_LOCK(m_CallbacksLock);
+    m_UtilsCallbacks.removeOne(user);
+  }
 
   delete user;
 }

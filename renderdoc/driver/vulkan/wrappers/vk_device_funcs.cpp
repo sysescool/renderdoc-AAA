@@ -593,13 +593,14 @@ VkResult WrappedVulkan::vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo
       VkDebugReportCallbackCreateInfoEXT *report =
           (VkDebugReportCallbackCreateInfoEXT *)pCreateInfo->pNext;
 
+      rdcstr msg = StringFormat::Fmt("RenderDoc does not support requested instance extension: %s.",
+                                     modifiedCreateInfo.ppEnabledExtensionNames[i]);
+
       while(report)
       {
         if(report->sType == VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT)
-          report->pfnCallback(VK_DEBUG_REPORT_ERROR_BIT_EXT,
-                              VK_DEBUG_REPORT_OBJECT_TYPE_INSTANCE_EXT, 0, 1, 1, "RDOC",
-                              "RenderDoc does not support a requested instance extension.",
-                              report->pUserData);
+          report->pfnCallback(VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_INSTANCE_EXT,
+                              0, 1, 1, "RDOC", msg.c_str(), report->pUserData);
 
         report = (VkDebugReportCallbackCreateInfoEXT *)report->pNext;
       }
@@ -612,7 +613,7 @@ VkResult WrappedVulkan::vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo
 
       messengerData.messageIdNumber = 1;
       messengerData.pMessageIdName = NULL;
-      messengerData.pMessage = "RenderDoc does not support a requested instance extension.";
+      messengerData.pMessage = msg.c_str();
       messengerData.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CALLBACK_DATA_EXT;
 
       while(messenger)
@@ -1581,6 +1582,34 @@ bool WrappedVulkan::SelectGraphicsComputeQueue(const rdcarray<VkQueueFamilyPrope
   }
 
   return true;
+}
+
+void WrappedVulkan::SendUserDebugMessage(const rdcstr &msg)
+{
+  VkDebugUtilsMessengerCallbackDataEXT messengerData = {};
+
+  messengerData.messageIdNumber = 1;
+  messengerData.pMessageIdName = NULL;
+  messengerData.pMessage = msg.c_str();
+  messengerData.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CALLBACK_DATA_EXT;
+
+  {
+    SCOPED_LOCK(m_CallbacksLock);
+
+    for(UserDebugReportCallbackData *cb : m_ReportCallbacks)
+    {
+      cb->createInfo.pfnCallback(VK_DEBUG_REPORT_ERROR_BIT_EXT,
+                                 VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT, 0, 1, 1, "RDOC",
+                                 msg.c_str(), cb->createInfo.pUserData);
+    }
+
+    for(UserDebugUtilsCallbackData *cb : m_UtilsCallbacks)
+    {
+      cb->createInfo.pfnUserCallback(VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+                                     VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT, &messengerData,
+                                     cb->createInfo.pUserData);
+    }
+  }
 }
 
 template <typename SerialiserType>
@@ -2961,6 +2990,13 @@ bool WrappedVulkan::Serialise_vkCreateDevice(SerialiserType &ser, VkPhysicalDevi
                                 (ext->attachmentFragmentShadingRate != VK_FALSE);
       }
       END_PHYS_EXT_CHECK();
+
+      BEGIN_PHYS_EXT_CHECK(VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT,
+                           VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT);
+      {
+        CHECK_PHYS_EXT_FEATURE(mutableDescriptorType);
+      }
+      END_PHYS_EXT_CHECK();
     }
 
     if(availFeatures.depthClamp)
@@ -3561,6 +3597,8 @@ bool WrappedVulkan::Serialise_vkCreateDevice(SerialiserType &ser, VkPhysicalDevi
       uint32_t qidx = createInfo.pQueueCreateInfos[i].queueFamilyIndex;
       m_ExternalQueues.resize(RDCMAX((uint32_t)m_ExternalQueues.size(), qidx + 1));
 
+      ImageBarrierSequence::SetMaxQueueFamilyIndex(qidx);
+
       VkCommandPoolCreateInfo poolInfo = {
           VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, NULL,
           VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, qidx,
@@ -3678,8 +3716,18 @@ VkResult WrappedVulkan::vkCreateDevice(VkPhysicalDevice physicalDevice,
           "For KHR/EXT extensions file an issue on github to request support: "
           "https://github.com/baldurk/renderdoc");
 
+      SendUserDebugMessage(
+          StringFormat::Fmt("RenderDoc does not support requested device extension: %s.",
+                            createInfo.ppEnabledExtensionNames[i]));
+
       return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
+  }
+
+  if(m_Device != VK_NULL_HANDLE)
+  {
+    SendUserDebugMessage("RenderDoc does not support multiple simultaneous logical devices.");
+    return VK_ERROR_INITIALIZATION_FAILED;
   }
 
   rdcarray<const char *> Extensions(createInfo.ppEnabledExtensionNames,
@@ -3994,6 +4042,8 @@ VkResult WrappedVulkan::vkCreateDevice(VkPhysicalDevice physicalDevice,
     {
       uint32_t qidx = createInfo.pQueueCreateInfos[i].queueFamilyIndex;
       m_ExternalQueues.resize(RDCMAX((uint32_t)m_ExternalQueues.size(), qidx + 1));
+
+      ImageBarrierSequence::SetMaxQueueFamilyIndex(qidx);
 
       VkCommandPoolCreateInfo poolInfo = {
           VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, NULL,

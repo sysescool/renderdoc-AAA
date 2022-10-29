@@ -112,9 +112,6 @@
     <Filter Include="Android">
       <UniqueIdentifier>{f9ed2873-6120-4b34-a3c2-e57b2de31eb9}</UniqueIdentifier>
     </Filter>
-    <Filter Include="3rdparty\android">
-      <UniqueIdentifier>{6e798cbc-0eae-4f48-9d7c-f3fe58bd32dc}</UniqueIdentifier>
-    </Filter>
     <Filter Include="3rdparty\interceptor-lib">
       <UniqueIdentifier>{0362a726-a8e6-436e-b523-893693163440}</UniqueIdentifier>
     </Filter>
@@ -129,12 +126,6 @@
     </Filter>
     <Filter Include="3rdparty\miniz">
       <UniqueIdentifier>{5994c355-880b-45b9-b17a-2e9e1fc2044a}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Common\Serialise\Codecs\cpp_codec">
-      <UniqueIdentifier>{27f41754-8fa8-4a78-afb8-f63a32473540}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Common\Serialise\Codecs\cpp_codec\vulkan">
-      <UniqueIdentifier>{ee6a7f7e-becf-43f0-8c7f-e0109a364ebb}</UniqueIdentifier>
     </Filter>
     <Filter Include="OS\Posix\GGP">
       <UniqueIdentifier>{b76c42f4-d523-4417-a474-56d278d35a36}</UniqueIdentifier>
@@ -432,9 +423,6 @@
     <ClInclude Include="android\jdwp.h">
       <Filter>Android</Filter>
     </ClInclude>
-    <ClInclude Include="3rdparty\android\android_manifest.h">
-      <Filter>3rdparty\android</Filter>
-    </ClInclude>
     <ClInclude Include="3rdparty\interceptor-lib\lib\code_generator.h">
       <Filter>3rdparty\interceptor-lib</Filter>
     </ClInclude>
@@ -473,9 +461,6 @@
     </ClInclude>
     <ClInclude Include="core\intervals.h">
       <Filter>Core</Filter>
-    </ClInclude>
-    <ClInclude Include="serialise\codecs\vk_cpp_codec_common.h">
-      <Filter>Common\Serialise\Codecs\cpp_codec\vulkan</Filter>
     </ClInclude>
     <ClInclude Include="data\glsl\glsl_ubos_cpp.h">
       <Filter>Resources\glsl</Filter>
@@ -881,9 +866,6 @@
     <ClCompile Include="android\android_utils.cpp">
       <Filter>Android</Filter>
     </ClCompile>
-    <ClCompile Include="android\android_patch.cpp">
-      <Filter>Android</Filter>
-    </ClCompile>
     <ClCompile Include="android\jdwp.cpp">
       <Filter>Android</Filter>
     </ClCompile>
@@ -891,9 +873,6 @@
       <Filter>Android</Filter>
     </ClCompile>
     <ClCompile Include="android\jdwp_util.cpp">
-      <Filter>Android</Filter>
-    </ClCompile>
-    <ClCompile Include="android\android_manifest.cpp">
       <Filter>Android</Filter>
     </ClCompile>
     <ClCompile Include="3rdparty\interceptor-lib\lib\code_generator.cc">
@@ -1135,6 +1114,18 @@
     </None>
     <None Include="data\hlsl\shaderdebug.hlsl">
       <Filter>Resources\hlsl</Filter>
+    </None>
+    <None Include="data\glsl\vk_buffer2ms.comp">
+      <Filter>Resources\glsl</Filter>
+    </None>
+    <None Include="data\glsl\vk_depthbuf2ms.frag">
+      <Filter>Resources\glsl</Filter>
+    </None>
+    <None Include="data\glsl\vk_depthms2buffer.comp">
+      <Filter>Resources\glsl</Filter>
+    </None>
+    <None Include="data\glsl\vk_ms2buffer.comp">
+      <Filter>Resources\glsl</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>

@@ -1102,48 +1102,42 @@ HRESULT WrappedID3D12Device::CreateRootSignature(UINT nodeMask, const void *pBlo
 
       wrapped->sig = GetShaderCache()->GetRootSig(pBlobWithRootSignature, blobLengthInBytes);
 
-      bool forceRefAll = false;
-
-      // force ref-all-resources if the heap is directly indexed because we can't track resource
-      // access
-      if(wrapped->sig.Flags & (D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED |
-                               D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED))
+      if(!m_BindlessResourceUseActive)
       {
-        forceRefAll = true;
-        RDCDEBUG("Forcing Ref All Resources due to heap-indexing root signature flags");
-      }
-      else
-      {
-        for(const D3D12RootSignatureParameter &param : wrapped->sig.Parameters)
+        // force ref-all-resources if the heap is directly indexed because we can't track resource
+        // access
+        if(wrapped->sig.Flags & (D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED |
+                                 D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED))
         {
-          if(param.ParameterType != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
-            continue;
-
-          for(UINT r = 0; r < param.DescriptorTable.NumDescriptorRanges; r++)
-          {
-            const D3D12_DESCRIPTOR_RANGE1 &range = param.DescriptorTable.pDescriptorRanges[r];
-            if(range.NumDescriptors > 100000)
-            {
-              forceRefAll = true;
-              RDCDEBUG(
-                  "Forcing Ref All Resources due to large root signature range of %u descriptors "
-                  "(space=%u, reg=%u, visibility=%s)",
-                  range.NumDescriptors, range.RegisterSpace, range.BaseShaderRegister,
-                  ToStr(param.ShaderVisibility).c_str());
-              break;
-            }
-          }
-
-          if(forceRefAll)
-            break;
+          m_BindlessResourceUseActive = true;
+          RDCDEBUG("Forcing Ref All Resources due to heap-indexing root signature flags");
         }
-      }
+        else
+        {
+          for(const D3D12RootSignatureParameter &param : wrapped->sig.Parameters)
+          {
+            if(param.ParameterType != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
+              continue;
 
-      if(forceRefAll)
-      {
-        CaptureOptions opts = RenderDoc::Inst().GetCaptureOptions();
-        opts.refAllResources = true;
-        RenderDoc::Inst().SetCaptureOptions(opts);
+            for(UINT r = 0; r < param.DescriptorTable.NumDescriptorRanges; r++)
+            {
+              const D3D12_DESCRIPTOR_RANGE1 &range = param.DescriptorTable.pDescriptorRanges[r];
+              if(range.NumDescriptors > 100000)
+              {
+                m_BindlessResourceUseActive = true;
+                RDCDEBUG(
+                    "Forcing Ref All Resources due to large root signature range of %u descriptors "
+                    "(space=%u, reg=%u, visibility=%s)",
+                    range.NumDescriptors, range.RegisterSpace, range.BaseShaderRegister,
+                    ToStr(param.ShaderVisibility).c_str());
+                break;
+              }
+            }
+
+            if(m_BindlessResourceUseActive)
+              break;
+          }
+        }
       }
 
       record->AddChunk(scope.Get());
@@ -1504,6 +1498,9 @@ bool WrappedID3D12Device::Serialise_CreateCommittedResource(
 
       GetResourceManager()->AddLiveResource(pResource, ret);
 
+      if(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+        m_ModResources.insert(GetResID(ret));
+
       SubresourceStateVector &states = m_ResourceStates[GetResID(ret)];
       states.fill(GetNumSubresources(m_pDevice, &desc), InitialResourceState);
 
@@ -1627,6 +1624,8 @@ HRESULT WrappedID3D12Device::CreateCommittedResource(const D3D12_HEAP_PROPERTIES
       SubresourceStateVector &states = m_ResourceStates[wrapped->GetResourceID()];
 
       states.fill(GetNumSubresources(m_pDevice, pDesc), InitialResourceState);
+
+      m_BindlessFrameRefs[wrapped->GetResourceID()] = BindlessRefTypeForRes(wrapped);
     }
 
     if(riidResource == __uuidof(ID3D12Resource))
@@ -1645,6 +1644,9 @@ HRESULT WrappedID3D12Device::CreateCommittedResource(const D3D12_HEAP_PROPERTIES
       {
         wrapped->AddRef();
         m_RefBuffers.push_back(wrapped);
+        if(m_BindlessResourceUseActive)
+          GetResourceManager()->MarkResourceFrameReferenced(wrapped->GetResourceID(),
+                                                            BindlessRefTypeForRes(wrapped));
       }
     }
   }
@@ -1822,6 +1824,9 @@ bool WrappedID3D12Device::Serialise_CreatePlacedResource(
 
       GetResourceManager()->AddLiveResource(pResource, ret);
 
+      if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+        m_ModResources.insert(GetResID(ret));
+
       SubresourceStateVector &states = m_ResourceStates[GetResID(ret)];
       states.fill(GetNumSubresources(m_pDevice, &Descriptor), InitialState);
     }
@@ -1939,6 +1944,8 @@ HRESULT WrappedID3D12Device::CreatePlacedResource(ID3D12Heap *pHeap, UINT64 Heap
       SubresourceStateVector &states = m_ResourceStates[wrapped->GetResourceID()];
 
       states.fill(GetNumSubresources(m_pDevice, pDesc), InitialState);
+
+      m_BindlessFrameRefs[wrapped->GetResourceID()] = BindlessRefTypeForRes(wrapped);
     }
 
     if(riid == __uuidof(ID3D12Resource))
@@ -1957,6 +1964,9 @@ HRESULT WrappedID3D12Device::CreatePlacedResource(ID3D12Heap *pHeap, UINT64 Heap
       {
         wrapped->AddRef();
         m_RefBuffers.push_back(wrapped);
+        if(m_BindlessResourceUseActive)
+          GetResourceManager()->MarkResourceFrameReferenced(wrapped->GetResourceID(),
+                                                            BindlessRefTypeForRes(wrapped));
       }
     }
   }
@@ -2024,6 +2034,9 @@ bool WrappedID3D12Device::Serialise_CreateReservedResource(
       ret = new WrappedID3D12Resource(ret, this);
 
       GetResourceManager()->AddLiveResource(pResource, ret);
+
+      if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+        m_ModResources.insert(GetResID(ret));
 
       SubresourceStateVector &states = m_ResourceStates[GetResID(ret)];
       states.fill(GetNumSubresources(m_pDevice, &Descriptor), InitialState);
@@ -2174,6 +2187,8 @@ HRESULT WrappedID3D12Device::CreateReservedResource(const D3D12_RESOURCE_DESC *p
       SubresourceStateVector &states = m_ResourceStates[wrapped->GetResourceID()];
 
       states.fill(GetNumSubresources(m_pDevice, pDesc), InitialState);
+
+      m_BindlessFrameRefs[wrapped->GetResourceID()] = BindlessRefTypeForRes(wrapped);
     }
 
     if(riid == __uuidof(ID3D12Resource))
@@ -2192,6 +2207,9 @@ HRESULT WrappedID3D12Device::CreateReservedResource(const D3D12_RESOURCE_DESC *p
       {
         wrapped->AddRef();
         m_RefBuffers.push_back(wrapped);
+        if(m_BindlessResourceUseActive)
+          GetResourceManager()->MarkResourceFrameReferenced(wrapped->GetResourceID(),
+                                                            BindlessRefTypeForRes(wrapped));
       }
     }
   }
@@ -2847,6 +2865,9 @@ bool WrappedID3D12Device::Serialise_OpenSharedHandle(SerialiserType &ser, HANDLE
 
         GetResourceManager()->AddLiveResource(resourceId, ret);
 
+        if(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+          m_ModResources.insert(GetResID(ret));
+
         SubresourceStateVector &states = m_ResourceStates[GetResID(ret)];
         states.fill(GetNumSubresources(m_pDevice, &desc), InitialResourceState);
 
@@ -3120,6 +3141,8 @@ HRESULT WrappedID3D12Device::OpenSharedHandleInternal(D3D12Chunk chunkType,
         SubresourceStateVector &states = m_ResourceStates[wrapped->GetResourceID()];
 
         states.fill(GetNumSubresources(m_pDevice, &desc), InitialResourceState);
+
+        m_BindlessFrameRefs[wrapped->GetResourceID()] = BindlessRefTypeForRes(wrapped);
       }
 
       // while actively capturing we keep all buffers around to prevent the address lookup from
@@ -3131,6 +3154,9 @@ HRESULT WrappedID3D12Device::OpenSharedHandleInternal(D3D12Chunk chunkType,
         {
           wrapped->AddRef();
           m_RefBuffers.push_back(wrapped);
+          if(m_BindlessResourceUseActive)
+            GetResourceManager()->MarkResourceFrameReferenced(wrapped->GetResourceID(),
+                                                              BindlessRefTypeForRes(wrapped));
         }
       }
     }

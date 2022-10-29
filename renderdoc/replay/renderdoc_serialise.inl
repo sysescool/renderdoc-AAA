@@ -1217,8 +1217,9 @@ template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, D3D11Pipe::StreamOut &el)
 {
   SERIALISE_MEMBER(outputs);
+  SERIALISE_MEMBER(rasterizedStream);
 
-  SIZE_CHECK(24);
+  SIZE_CHECK(32);
 }
 
 template <typename SerialiserType>
@@ -1322,7 +1323,7 @@ void DoSerialise(SerialiserType &ser, D3D11Pipe::State &el)
 
   SERIALISE_MEMBER(predication);
 
-  SIZE_CHECK(2088);
+  SIZE_CHECK(2096);
 }
 
 #pragma endregion D3D11 pipeline state
@@ -1486,8 +1487,9 @@ template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, D3D12Pipe::StreamOut &el)
 {
   SERIALISE_MEMBER(outputs);
+  SERIALISE_MEMBER(rasterizedStream);
 
-  SIZE_CHECK(24);
+  SIZE_CHECK(32);
 }
 
 template <typename SerialiserType>
@@ -1607,7 +1609,7 @@ void DoSerialise(SerialiserType &ser, D3D12Pipe::State &el)
 
   SERIALISE_MEMBER(resourceStates);
 
-  SIZE_CHECK(1416);
+  SIZE_CHECK(1424);
 }
 
 #pragma endregion D3D12 pipeline state
@@ -1693,8 +1695,9 @@ void DoSerialise(SerialiserType &ser, GLPipe::Texture &el)
   SERIALISE_MEMBER(swizzle);
   SERIALISE_MEMBER(depthReadChannel);
   SERIALISE_MEMBER(completeStatus);
+  SERIALISE_MEMBER(typeConflict);
 
-  SIZE_CHECK(56);
+  SIZE_CHECK(80);
 }
 
 template <typename SerialiserType>
@@ -1920,6 +1923,7 @@ void DoSerialise(SerialiserType &ser, GLPipe::State &el)
 template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, VKPipe::BindingElement &el)
 {
+  SERIALISE_MEMBER(type);
   SERIALISE_MEMBER(viewResourceId);
   SERIALISE_MEMBER(resourceResourceId);
   SERIALISE_MEMBER(samplerResourceId);
@@ -1958,7 +1962,7 @@ void DoSerialise(SerialiserType &ser, VKPipe::BindingElement &el)
   SERIALISE_MEMBER(chromaFilter);
   SERIALISE_MEMBER(forceExplicitReconstruction);
 
-  SIZE_CHECK(184);
+  SIZE_CHECK(192);
 };
 
 template <typename SerialiserType>
@@ -1968,7 +1972,6 @@ void DoSerialise(SerialiserType &ser, VKPipe::DescriptorBinding &el)
   SERIALISE_MEMBER(dynamicallyUsedCount);
   SERIALISE_MEMBER(firstUsedIndex);
   SERIALISE_MEMBER(lastUsedIndex);
-  SERIALISE_MEMBER(type);
   SERIALISE_MEMBER(stageFlags);
 
   SERIALISE_MEMBER(binds);
@@ -2111,8 +2114,9 @@ template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, VKPipe::TransformFeedback &el)
 {
   SERIALISE_MEMBER(buffers);
+  SERIALISE_MEMBER(rasterizedStream);
 
-  SIZE_CHECK(16);
+  SIZE_CHECK(24);
 }
 
 template <typename SerialiserType>
@@ -2353,7 +2357,7 @@ void DoSerialise(SerialiserType &ser, VKPipe::State &el)
 
   SERIALISE_MEMBER(conditionalRendering);
 
-  SIZE_CHECK(2248);
+  SIZE_CHECK(2256);
 }
 
 #pragma endregion Vulkan pipeline state

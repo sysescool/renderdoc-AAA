@@ -267,8 +267,8 @@ inline InitReqType InitReq(FrameRefType refType, InitPolicy policy, bool initial
 
 // handle marking a resource referenced for read or write and storing RAW access etc.
 template <typename Compose>
-bool MarkReferenced(std::map<ResourceId, FrameRefType> &refs, ResourceId id, FrameRefType refType,
-                    Compose comp)
+bool MarkReferenced(std::unordered_map<ResourceId, FrameRefType> &refs, ResourceId id,
+                    FrameRefType refType, Compose comp)
 {
   auto refit = refs.find(id);
   if(refit == refs.end())
@@ -283,7 +283,7 @@ bool MarkReferenced(std::map<ResourceId, FrameRefType> &refs, ResourceId id, Fra
   return false;
 }
 
-inline bool MarkReferenced(std::map<ResourceId, FrameRefType> &refs, ResourceId id,
+inline bool MarkReferenced(std::unordered_map<ResourceId, FrameRefType> &refs, ResourceId id,
                            FrameRefType refType)
 {
   return MarkReferenced(refs, id, refType, ComposeFrameRefs);
@@ -534,7 +534,7 @@ protected:
   rdcarray<StoredChunk> m_Chunks;
   Threading::CriticalSection *m_ChunkLock;
 
-  std::map<ResourceId, FrameRefType> m_FrameRefs;
+  std::unordered_map<ResourceId, FrameRefType> m_FrameRefs;
 };
 
 template <typename Compose>
@@ -722,7 +722,7 @@ protected:
   std::map<RealResourceType, WrappedResourceType> m_WrapperMap;
 
   // used during capture - holds resources referenced in current frame (and how they're referenced)
-  std::map<ResourceId, FrameRefType> m_FrameReferencedResources;
+  std::unordered_map<ResourceId, FrameRefType> m_FrameReferencedResources;
 
   // used during capture - holds resources marked as dirty, needing initial contents
   std::set<ResourceId> m_DirtyResources;
@@ -745,7 +745,7 @@ protected:
   };
 
   // used during capture or replay - holds initial contents
-  std::map<ResourceId, InitialContentDataOrChunk> m_InitialContents;
+  std::unordered_map<ResourceId, InitialContentDataOrChunk> m_InitialContents;
 
   // used during capture or replay - map of resources currently alive with their real IDs, used in
   // capture and replay.
@@ -1306,7 +1306,7 @@ void ResourceManager<Configuration>::CreateInitialContents(ReadSerialiser &ser)
 {
   using namespace ResourceManagerInternal;
 
-  std::set<ResourceId> ids;
+  std::unordered_set<ResourceId> ids;
 
   rdcarray<WrittenRecord> NeededInitials;
   SERIALISE_ELEMENT(NeededInitials);
@@ -1438,7 +1438,7 @@ void ResourceManager<Configuration>::PrepareInitialContents()
 {
   SCOPED_LOCK_OPTIONAL(m_Lock, m_Capturing);
 
-  RDCDEBUG("Preparing up to %u potentially dirty resources", (uint32_t)m_DirtyResources.size());
+  RDCLOG("Preparing up to %u potentially dirty resources", (uint32_t)m_DirtyResources.size());
   uint32_t prepared = 0;
   uint32_t postponed = 0;
   uint32_t skipped = 0;
@@ -1491,7 +1491,7 @@ void ResourceManager<Configuration>::PrepareInitialContents()
     Prepare_InitialState(res);
   }
 
-  RDCDEBUG("Prepared %u dirty resources, postponed %u, skipped %u", prepared, postponed, skipped);
+  RDCLOG("Prepared %u dirty resources, postponed %u, skipped %u", prepared, postponed, skipped);
 }
 
 template <typename Configuration>
@@ -1502,7 +1502,8 @@ void ResourceManager<Configuration>::InsertInitialContentsChunks(WriteSerialiser
   uint32_t dirty = 0;
   uint32_t skipped = 0;
 
-  RDCDEBUG("Checking %u resources with initial contents", (uint32_t)m_InitialContents.size());
+  RDCLOG("Checking %u resources with initial contents against %u referenced resources",
+         (uint32_t)m_InitialContents.size(), (uint32_t)m_FrameReferencedResources.size());
 
   float num = float(m_InitialContents.size());
   float idx = 0.0f;
@@ -1575,7 +1576,7 @@ void ResourceManager<Configuration>::InsertInitialContentsChunks(WriteSerialiser
     SetInitialContents(id, InitialContentData());
   }
 
-  RDCDEBUG("Serialised %u resources, skipped %u unreferenced", dirty, skipped);
+  RDCLOG("Serialised %u resources, skipped %u unreferenced", dirty, skipped);
 }
 
 template <typename Configuration>

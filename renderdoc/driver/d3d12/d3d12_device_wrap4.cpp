@@ -298,6 +298,9 @@ bool WrappedID3D12Device::Serialise_CreateCommittedResource1(
 
       GetResourceManager()->AddLiveResource(pResource, ret);
 
+      if(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+        m_ModResources.insert(GetResID(ret));
+
       SubresourceStateVector &states = m_ResourceStates[GetResID(ret)];
       states.fill(GetNumSubresources(m_pDevice, &desc), InitialResourceState);
 
@@ -419,6 +422,8 @@ HRESULT WrappedID3D12Device::CreateCommittedResource1(
       SubresourceStateVector &states = m_ResourceStates[wrapped->GetResourceID()];
 
       states.fill(GetNumSubresources(m_pDevice, pDesc), InitialResourceState);
+
+      m_BindlessFrameRefs[wrapped->GetResourceID()] = BindlessRefTypeForRes(wrapped);
     }
 
     if(riidResource == __uuidof(ID3D12Resource))
@@ -437,6 +442,9 @@ HRESULT WrappedID3D12Device::CreateCommittedResource1(
       {
         wrapped->AddRef();
         m_RefBuffers.push_back(wrapped);
+        if(m_BindlessResourceUseActive)
+          GetResourceManager()->MarkResourceFrameReferenced(wrapped->GetResourceID(),
+                                                            BindlessRefTypeForRes(wrapped));
       }
     }
   }

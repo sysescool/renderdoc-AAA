@@ -54,7 +54,7 @@ struct D3D12InitParams
   UINT SDKVersion = 0;
 
   // check if a frame capture section version is supported
-  static const uint64_t CurrentVersion = 0xD;
+  static const uint64_t CurrentVersion = 0xE;
 
   static bool IsSupportedVersion(uint64_t ver);
 };
@@ -588,7 +588,8 @@ private:
   WrappedID3D12CommandQueue *m_Queue;
 
   ID3D12CommandAllocator *m_Alloc = NULL, *m_DataUploadAlloc = NULL;
-  ID3D12GraphicsCommandList *m_DataUploadList = NULL;
+  ID3D12GraphicsCommandList *m_DataUploadList[16] = {};
+  size_t m_CurDataUpload = 0;
   ID3D12DescriptorHeap *m_RTVHeap = NULL;
   ID3D12Fence *m_GPUSyncFence;
   HANDLE m_GPUSyncHandle;
@@ -633,6 +634,7 @@ private:
   D3D12TextRenderer *m_TextRenderer = NULL;
 
   std::set<ResourceId> m_UploadResourceIds;
+  std::set<ResourceId> m_ModResources;
   std::map<uint64_t, ID3D12Resource *> m_UploadBuffers;
 
   Threading::CriticalSection m_MapsLock;
@@ -715,6 +717,7 @@ private:
   // used both on capture and replay side to track resource states. Only locked
   // in capture
   std::map<ResourceId, SubresourceStateVector> m_ResourceStates;
+  std::unordered_map<ResourceId, FrameRefType> m_BindlessFrameRefs;
   Threading::CriticalSection m_ResourceStatesLock;
 
   // used on replay only. Contains the initial resource states before any barriers - this allows us
@@ -734,6 +737,9 @@ private:
 
     WrappedID3D12CommandQueue *queue;
   };
+
+  bool m_BindlessResourceUseActive = false;
+  FrameRefType BindlessRefTypeForRes(ID3D12Resource *wrapped);
 
   std::map<IDXGISwapper *, SwapPresentInfo> m_SwapChains;
   std::map<ResourceId, DXGI_FORMAT> m_BackbufferFormat;
@@ -799,6 +805,7 @@ public:
   void FirstFrame(IDXGISwapper *swapper);
   const ActionDescription *GetAction(uint32_t eventId);
 
+  bool IsBindlessResourceUseActive() const { return m_BindlessResourceUseActive; }
   ResourceId GetFrameCaptureResourceId() { return m_FrameCaptureRecord->GetResourceID(); }
   void AddDebugMessage(MessageCategory c, MessageSeverity sv, MessageSource src, rdcstr d);
   void AddDebugMessage(const DebugMessage &msg);
@@ -843,7 +850,7 @@ public:
     m_ReplayAGS = ags;
   }
   const ReplayOptions &GetReplayOptions() { return m_ReplayOptions; }
-  uint64_t GetLogVersion() { return m_SectionVersion; }
+  uint64_t GetCaptureVersion() { return m_SectionVersion; }
   CaptureState GetState() { return m_State; }
   D3D12Replay *GetReplay() { return m_Replay; }
   WrappedID3D12CommandQueue *GetQueue() { return m_Queue; }
@@ -900,6 +907,8 @@ public:
 
   ID3D12GraphicsCommandListX *GetNewList();
   ID3D12GraphicsCommandListX *GetInitialStateList();
+
+  bool IsReadOnlyResource(ResourceId id) { return m_ModResources.find(id) == m_ModResources.end(); }
   void CloseInitialStateList();
   ID3D12Resource *GetUploadBuffer(uint64_t chunkOffset, uint64_t byteSize);
   void ApplyInitialContents();

@@ -3,7 +3,7 @@ Features
 
 This page documents the current feature set of RenderDoc. This gives an overview of what RenderDoc is capable of, and where it is in its development.
 
-Currently RenderDoc supports Vulkan, D3D11, D3D12, OpenGL, and OpenGL ES on Windows, Linux, Android, Stadia, and Nintendo Switch :sup:`TM`. The UI runs in Qt and will work on any desktop platform.
+Currently RenderDoc supports Vulkan, D3D11, D3D12, OpenGL, and OpenGL ES on Windows, Linux, Android, and Nintendo Switch :sup:`TM`. The UI runs in Qt and will work on any desktop platform.
 
 RenderDoc can also double as an image viewer in a simplistic fashion, separate to its functionality as a debugger. Drag in or open any of a variety of image file formats and RenderDoc will display them as if they were the only texture in a capture. This way it can be used as a simple e.g. dds viewer, with support for all sorts of formats, encodings and things typical image viewers don't tend to handle like mips, cubemaps and arrays.
 
@@ -79,14 +79,14 @@ D3D11
 D3D12
 -----
 
-* Support for D3D12 up to D3D12.3, Windows 10 only.
+* Support for D3D12 up to D3D12.9, Windows 10 and above, and D3D12On7 on Windows 7.
 * Debug marker uses the SetMarker/BeginEvent/EndEvent functions on the command list or queue.
 * Vertex, Pixel and Compute shader debugging for DXBC/fxc shaders.
 
 Vulkan
 ------
 
-* Support for Vulkan 1.2 on Windows, Linux, Android, and Stadia.
+* Support for Vulkan 1.3 on Windows, Linux, and Android.
 * Event markers and object naming both come from ``VK_EXT_debug_utils`` or deprecated ``VK_EXT_debug_marker``.
 
 Captures have a very limited amount of portability between machines. Many hardware-specific feature uses are baked into captures, and portability depends on how similar the capture and replay hardware are, whether these feature uses can map the same in both cases. Captures are however completely portable between different OSes with sufficiently comparable hardware.

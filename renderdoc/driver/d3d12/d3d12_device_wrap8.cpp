@@ -119,6 +119,9 @@ bool WrappedID3D12Device::Serialise_CreateCommittedResource2(
 
       GetResourceManager()->AddLiveResource(pResource, ret);
 
+      if(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+        m_ModResources.insert(GetResID(ret));
+
       SubresourceStateVector &states = m_ResourceStates[GetResID(ret)];
       // D3D12_RESOURCE_DESC is the same as the start of D3D12_RESOURCE_DESC1
       D3D12_RESOURCE_DESC desc0;
@@ -249,6 +252,8 @@ HRESULT WrappedID3D12Device::CreateCommittedResource2(
       D3D12_RESOURCE_DESC desc0;
       memcpy(&desc0, pDesc, sizeof(desc0));
       states.fill(GetNumSubresources(m_pDevice, &desc0), InitialResourceState);
+
+      m_BindlessFrameRefs[wrapped->GetResourceID()] = BindlessRefTypeForRes(wrapped);
     }
 
     if(riidResource == __uuidof(ID3D12Resource))
@@ -267,6 +272,9 @@ HRESULT WrappedID3D12Device::CreateCommittedResource2(
       {
         wrapped->AddRef();
         m_RefBuffers.push_back(wrapped);
+        if(m_BindlessResourceUseActive)
+          GetResourceManager()->MarkResourceFrameReferenced(wrapped->GetResourceID(),
+                                                            BindlessRefTypeForRes(wrapped));
       }
     }
   }
@@ -354,6 +362,9 @@ bool WrappedID3D12Device::Serialise_CreatePlacedResource1(
       ret = new WrappedID3D12Resource(ret, this);
 
       GetResourceManager()->AddLiveResource(pResource, ret);
+
+      if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+        m_ModResources.insert(GetResID(ret));
 
       // D3D12_RESOURCE_DESC is the same as the start of D3D12_RESOURCE_DESC1
       D3D12_RESOURCE_DESC desc0;
@@ -480,6 +491,8 @@ HRESULT WrappedID3D12Device::CreatePlacedResource1(ID3D12Heap *pHeap, UINT64 Hea
       D3D12_RESOURCE_DESC desc0;
       memcpy(&desc0, pDesc, sizeof(desc0));
       states.fill(GetNumSubresources(m_pDevice, &desc0), InitialState);
+
+      m_BindlessFrameRefs[wrapped->GetResourceID()] = BindlessRefTypeForRes(wrapped);
     }
 
     if(riid == __uuidof(ID3D12Resource))
@@ -498,6 +511,9 @@ HRESULT WrappedID3D12Device::CreatePlacedResource1(ID3D12Heap *pHeap, UINT64 Hea
       {
         wrapped->AddRef();
         m_RefBuffers.push_back(wrapped);
+        if(m_BindlessResourceUseActive)
+          GetResourceManager()->MarkResourceFrameReferenced(wrapped->GetResourceID(),
+                                                            BindlessRefTypeForRes(wrapped));
       }
     }
   }

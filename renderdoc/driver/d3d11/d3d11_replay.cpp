@@ -1115,6 +1115,10 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
       ret.streamOut.outputs[s].resourceId = rm->GetOriginalID(GetIDForDeviceChild(rs->SO.Buffers[s]));
       ret.streamOut.outputs[s].byteOffset = rs->SO.Offsets[s];
     }
+
+    const SOShaderData &soshader = m_pDevice->GetSOShaderData(GetIDForDeviceChild(rs->GS.Object));
+
+    ret.streamOut.rasterizedStream = soshader.rastStream;
   }
 
   /////////////////////////////////////////////////
@@ -4313,6 +4317,8 @@ RDResult D3D11_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, IRepl
           RDCLOG(
               "Device creation failed with validation active - check that you have the "
               "SDK installed or Windows feature enabled to get the D3D debug layers.");
+
+          hr = hr2;
 
           break;
         }

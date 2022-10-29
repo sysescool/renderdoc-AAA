@@ -60,7 +60,8 @@ void FillSpecConstantVariables(ResourceId shader, const SPIRVPatchData &patchDat
 }
 
 void AddXFBAnnotations(const ShaderReflection &refl, const SPIRVPatchData &patchData,
-                       const char *entryName, rdcarray<uint32_t> &modSpirv, uint32_t &xfbStride)
+                       uint32_t rastStream, const char *entryName, rdcarray<uint32_t> &modSpirv,
+                       uint32_t &xfbStride)
 {
   rdcspv::Editor editor(modSpirv);
 
@@ -104,7 +105,8 @@ void AddXFBAnnotations(const ShaderReflection &refl, const SPIRVPatchData &patch
         rdcspv::OpDecorate decorate(it);
 
         if(decorate.decoration == rdcspv::Decoration::XfbBuffer ||
-           decorate.decoration == rdcspv::Decoration::XfbStride)
+           decorate.decoration == rdcspv::Decoration::XfbStride ||
+           decorate.decoration == rdcspv::Decoration::Stream)
         {
           editor.Remove(it);
         }
@@ -164,6 +166,10 @@ void AddXFBAnnotations(const ShaderReflection &refl, const SPIRVPatchData &patch
 
   for(size_t i = 0; i < outsig.size(); i++)
   {
+    // ignore anything from the non-rasterized stream
+    if(outsig[i].stream != rastStream)
+      continue;
+
     if(outpatch[i].isArraySubsequentElement)
     {
       // do not patch anything as we only patch the base array, but reserve space in the stride
@@ -190,6 +196,10 @@ void AddXFBAnnotations(const ShaderReflection &refl, const SPIRVPatchData &patch
 
   for(size_t i = 0; i < outpatch.size(); i++)
   {
+    // ignore anything from the non-rasterized stream
+    if(outsig[i].stream != rastStream)
+      continue;
+
     if(outpatch[i].ID && !outpatch[i].isArraySubsequentElement &&
        vars.find(outpatch[i].ID) == vars.end())
     {
@@ -198,6 +208,32 @@ void AddXFBAnnotations(const ShaderReflection &refl, const SPIRVPatchData &patch
       editor.AddDecoration(rdcspv::OpDecorate(
           outpatch[i].ID, rdcspv::DecorationParam<rdcspv::Decoration::XfbStride>(xfbStride)));
       vars.insert(outpatch[i].ID);
+    }
+  }
+
+  // if the rasterized stream isn't 0 we need to patch any stream emits to emit 0 instead of
+  // rastStream, and drop any that used to go to other streams
+  if(hasXFB && rastStream != 0)
+  {
+    rdcspv::Id newStream = editor.AddConstantImmediate<uint32_t>(0U);
+
+    for(rdcspv::Iter it = editor.Begin(rdcspv::Section::Functions);
+        it < editor.End(rdcspv::Section::Functions); ++it)
+    {
+      if(it.opcode() == rdcspv::Op::EmitStreamVertex || it.opcode() == rdcspv::Op::EndStreamPrimitive)
+      {
+        // same format for both
+        rdcspv::OpEmitStreamVertex emit(it);
+
+        ShaderVariable stream = editor.EvaluateConstant(emit.stream, {});
+
+        // if this was emitting to our stream, still emit but to the new stream index. If it wasn't,
+        // drop it entirely
+        if(stream.value.u32v[0] == rastStream)
+          it.word(1) = newStream.value();
+        else
+          editor.Remove(it);
+      }
     }
   }
 }
@@ -397,7 +433,11 @@ StructSizes CalculateStructProps(uint32_t emptyStructSize, const ShaderConstant 
 
       if(i + 1 == c.type.members.size())
       {
-        ret.scalarSize = AlignUp(m.byteOffset + member.scalarSize, ret.scalarAlign);
+        // scalar struct sizes are NOT padded up to the multiple of their alignment. It is allowed
+        // in scalar packing for an outside variable to 'sit in' the padding at the end of a struct
+        // due to alignment. This rule is more tight than even C packing, which normally has
+        // sizeof(struct) be a multiple of its alignment
+        ret.scalarSize = m.byteOffset + member.scalarSize;
         ret.baseSize = AlignUp(m.byteOffset + member.baseSize, ret.baseAlign);
         ret.extendedSize = AlignUp16(m.byteOffset + member.extendedSize);
       }
@@ -1038,6 +1078,8 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
         {
           const std::set<uint32_t> &usedchildren = usedStructChildren[global.id];
 
+          size_t oldSigSize = sigarray.size();
+
           for(uint32_t i = 0; i < (uint32_t)baseType.children.size(); i++)
           {
             // skip this member if it's in a builtin struct but has no builtin decoration
@@ -1063,6 +1105,18 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
             AddSignatureParameter(isInput, stage, global.id, baseType.id, dummy, patch, childname,
                                   dataTypes[baseType.children[i].type],
                                   baseType.children[i].decorations, sigarray, patchData, specInfo);
+          }
+
+          // apply stream decoration from a parent struct into newly-added members
+          for(const DecorationAndParamData &d : decorations[global.id].others)
+          {
+            if(d.value == Decoration::Stream)
+            {
+              for(size_t idx = oldSigSize; idx < sigarray.size(); idx++)
+              {
+                sigarray[idx].stream = d.stream;
+              }
+            }
           }
 
           // move on now, we've processed this global struct
@@ -1596,8 +1650,11 @@ void Reflector::MakeConstantBlockVariables(rdcspv::StorageClass storage, const D
   cblock.resize(structType.children.size());
   for(size_t i = 0; i < structType.children.size(); i++)
   {
+    rdcstr name = structType.children[i].name;
+    if(name.empty())
+      name = StringFormat::Fmt("_child%zu", i);
     MakeConstantBlockVariable(cblock[i], pointerTypes, storage,
-                              dataTypes[structType.children[i].type], structType.children[i].name,
+                              dataTypes[structType.children[i].type], name,
                               structType.children[i].decorations, specInfo);
   }
 
@@ -1882,6 +1939,8 @@ void Reflector::AddSignatureParameter(const bool isInput, const ShaderStage stag
       // push the member-index access chain value
       patch.accessChain.push_back(0U);
 
+      size_t oldSigSize = sigarray.size();
+
       for(size_t c = 0; c < varType->children.size(); c++)
       {
         rdcstr childName = varName;
@@ -1900,6 +1959,18 @@ void Reflector::AddSignatureParameter(const bool isInput, const ShaderStage stag
 
         // increment the member-index access chain value
         patch.accessChain.back()++;
+      }
+
+      // apply stream decoration from a parent struct into newly-added members
+      for(const DecorationAndParamData &d : varDecorations.others)
+      {
+        if(d.value == Decoration::Stream)
+        {
+          for(size_t idx = oldSigSize; idx < sigarray.size(); idx++)
+          {
+            sigarray[idx].stream = d.stream;
+          }
+        }
       }
 
       // pop the member-index access chain value
@@ -1941,8 +2012,12 @@ void Reflector::AddSignatureParameter(const bool isInput, const ShaderStage stag
   sig.regChannelMask = sig.channelUsedMask = (1 << sig.compCount) - 1;
 
   for(const DecorationAndParamData &d : varDecorations.others)
+  {
     if(d.value == Decoration::Component)
       sig.regChannelMask <<= d.component;
+    if(d.value == Decoration::Stream)
+      sig.stream = d.stream;
+  }
 
   sig.channelUsedMask = sig.regChannelMask;
 

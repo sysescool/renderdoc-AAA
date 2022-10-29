@@ -638,7 +638,7 @@ D3D12Descriptor D3D12DebugAPIWrapper::FindDescriptor(DXBCBytecode::OperandType t
       if(IsShaderParameterVisible(GetShaderType(), param.ShaderVisibility))
       {
         if(param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_SRV && element.type == eRootSRV &&
-           type != DXBCBytecode::TYPE_UNORDERED_ACCESS_VIEW)
+           type == DXBCBytecode::TYPE_RESOURCE)
         {
           if(param.Descriptor.ShaderRegister == slot.shaderRegister &&
              param.Descriptor.RegisterSpace == slot.registerSpace)
@@ -693,19 +693,12 @@ D3D12Descriptor D3D12DebugAPIWrapper::FindDescriptor(DXBCBytecode::OperandType t
           {
             const D3D12_DESCRIPTOR_RANGE1 &range = param.ranges[r];
 
-            if(range.RangeType != searchRangeType)
-              continue;
-
             // For every range, check the number of descriptors so that we are accessing the
             // correct data for append descriptor tables, even if the range type doesn't match
             // what we need to fetch
             UINT offset = range.OffsetInDescriptorsFromTableStart;
             if(range.OffsetInDescriptorsFromTableStart == D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND)
               offset = prevTableOffset;
-
-            D3D12Descriptor *desc = (D3D12Descriptor *)heap->GetCPUDescriptorHandleForHeapStart().ptr;
-            desc += element.offset;
-            desc += offset;
 
             UINT numDescriptors = range.NumDescriptors;
             if(numDescriptors == UINT_MAX)
@@ -718,6 +711,13 @@ D3D12Descriptor D3D12DebugAPIWrapper::FindDescriptor(DXBCBytecode::OperandType t
             }
 
             prevTableOffset = offset + numDescriptors;
+
+            if(range.RangeType != searchRangeType)
+              continue;
+
+            D3D12Descriptor *desc = (D3D12Descriptor *)heap->GetCPUDescriptorHandleForHeapStart().ptr;
+            desc += element.offset;
+            desc += offset;
 
             // Check if the slot we want is contained
             if(slot.shaderRegister >= range.BaseShaderRegister &&
@@ -962,6 +962,14 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
         result.value.u32v[3] =
             isarray ? srvDesc.Texture1DArray.MipLevels : srvDesc.Texture1D.MipLevels;
 
+        if(isarray && (result.value.u32v[1] == 0 || result.value.u32v[1] == ~0U))
+          result.value.u32v[1] = resDesc.DepthOrArraySize;
+
+        if(result.value.u32v[3] == 0 || result.value.u32v[3] == ~0U)
+          result.value.u32v[3] = resDesc.MipLevels;
+        if(result.value.u32v[3] == 0 || result.value.u32v[3] == ~0U)
+          result.value.u32v[3] = CalcNumMips((int)resDesc.Width, resDesc.Height, 1);
+
         if(mipLevel >= result.value.u32v[3])
           result.value.u32v[0] = result.value.u32v[1] = 0;
 
@@ -985,6 +993,9 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
         {
           result.value.u32v[2] = srvDesc.Texture2DArray.ArraySize;
           result.value.u32v[3] = srvDesc.Texture2DArray.MipLevels;
+
+          if(result.value.u32v[2] == 0 || result.value.u32v[2] == ~0U)
+            result.value.u32v[2] = resDesc.DepthOrArraySize;
         }
         else if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DMS)
         {
@@ -995,7 +1006,16 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
         {
           result.value.u32v[2] = srvDesc.Texture2DMSArray.ArraySize;
           result.value.u32v[3] = 1;
+
+          if(result.value.u32v[2] == 0 || result.value.u32v[2] == ~0U)
+            result.value.u32v[2] = resDesc.DepthOrArraySize;
         }
+
+        if(result.value.u32v[3] == 0 || result.value.u32v[3] == ~0U)
+          result.value.u32v[3] = resDesc.MipLevels;
+        if(result.value.u32v[3] == 0 || result.value.u32v[3] == ~0U)
+          result.value.u32v[3] = CalcNumMips((int)resDesc.Width, resDesc.Height, 1);
+
         if(mipLevel >= result.value.u32v[3])
           result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] = 0;
 
@@ -1009,6 +1029,12 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
         result.value.u32v[1] = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
         result.value.u32v[2] = RDCMAX(1U, (uint32_t)(resDesc.DepthOrArraySize >> mipLevel));
         result.value.u32v[3] = srvDesc.Texture3D.MipLevels;
+
+        if(result.value.u32v[3] == 0 || result.value.u32v[3] == ~0U)
+          result.value.u32v[3] = resDesc.MipLevels;
+        if(result.value.u32v[3] == 0 || result.value.u32v[3] == ~0U)
+          result.value.u32v[3] =
+              CalcNumMips((int)resDesc.Width, resDesc.Height, resDesc.DepthOrArraySize);
 
         if(mipLevel >= result.value.u32v[3])
           result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] = 0;
@@ -1033,6 +1059,14 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
         result.value.u32v[2] = isarray ? srvDesc.TextureCubeArray.NumCubes : 0;
         result.value.u32v[3] =
             isarray ? srvDesc.TextureCubeArray.MipLevels : srvDesc.TextureCube.MipLevels;
+
+        if(result.value.u32v[2] == 0 || result.value.u32v[2] == ~0U)
+          result.value.u32v[2] = resDesc.DepthOrArraySize / 6;
+
+        if(result.value.u32v[3] == 0 || result.value.u32v[3] == ~0U)
+          result.value.u32v[3] = resDesc.MipLevels;
+        if(result.value.u32v[3] == 0 || result.value.u32v[3] == ~0U)
+          result.value.u32v[3] = CalcNumMips((int)resDesc.Width, resDesc.Height, 1);
 
         if(mipLevel >= result.value.u32v[3])
           result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] = 0;
@@ -2018,18 +2052,23 @@ struct PSInitialData
   if(usePrimitiveID)
   {
     extractHlsl += R"(
-void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position, uint prim : SV_PrimitiveID,
-                     uint sample : SV_SampleIndex, uint covge : SV_Coverage,
-                     bool fface : SV_IsFrontFace)
+void ExtractInputsPS(PSInput IN,
+                     float4 debug_pixelPos : SV_Position,
+                     uint prim : SV_PrimitiveID,
+                     uint fface : SV_IsFrontFace,
+                     uint sample : SV_SampleIndex,
+                     uint covge : SV_Coverage)
 {
 )";
   }
   else
   {
     extractHlsl += R"(
-void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position,
-                     uint sample : SV_SampleIndex, uint covge : SV_Coverage,
-                     bool fface : SV_IsFrontFace)
+void ExtractInputsPS(PSInput IN,
+                     float4 debug_pixelPos : SV_Position,
+                     uint fface : SV_IsFrontFace,
+                     uint sample : SV_SampleIndex,
+                     uint covge : SV_Coverage)
 {
 )";
   }
@@ -2303,6 +2342,22 @@ void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position,
     return new ShaderDebugTrace;
   }
 
+  // if we have a depth buffer bound and we are testing EQUAL grab the current depth value for our
+  // target sample
+  D3D12_COMPARISON_FUNC depthFunc = pipeDesc.DepthStencilState.DepthFunc;
+  float existingDepth = -1.0f;
+  ResourceId depthTarget = rs.dsv.GetResResourceId();
+
+  if(depthFunc == D3D12_COMPARISON_FUNC_EQUAL && depthTarget != ResourceId())
+  {
+    float depthStencilValue[4] = {};
+    PickPixel(depthTarget, x, y, Subresource(rs.dsv.GetDSV().Texture2DArray.MipSlice,
+                                             rs.dsv.GetDSV().Texture2DArray.FirstArraySlice, sample),
+              CompType::Depth, depthStencilValue);
+
+    existingDepth = depthStencilValue[0];
+  }
+
   ID3D12GraphicsCommandListX *cmdList = m_pDevice->GetDebugManager()->ResetDebugList();
 
   // clear our UAVs
@@ -2403,7 +2458,6 @@ void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position,
   int destIdx = (x - xTL) + 2 * (y - yTL);
 
   // Get depth func and determine "winner" pixel
-  D3D12_COMPARISON_FUNC depthFunc = pipeDesc.DepthStencilState.DepthFunc;
   DebugHit *pWinnerHit = NULL;
   float *evalSampleCache = (float *)evalData.data();
 
@@ -2445,12 +2499,20 @@ void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position,
           pWinnerHit = pHit;
           evalSampleCache = ((float *)evalData.data()) + evalSampleCacheData.size() * 4 * i;
         }
-        else if((depthFunc == D3D12_COMPARISON_FUNC_ALWAYS ||
-                 depthFunc == D3D12_COMPARISON_FUNC_NEVER ||
-                 depthFunc == D3D12_COMPARISON_FUNC_NOT_EQUAL ||
-                 depthFunc == D3D12_COMPARISON_FUNC_EQUAL))
+        else if(depthFunc == D3D12_COMPARISON_FUNC_EQUAL && existingDepth >= 0.0f)
         {
-          // For depth functions without an inequality comparison, use the last sample encountered
+          // for depth equal, check if this hit is closer than the winner, and if so use it.
+          if(fabs(pHit->depth - existingDepth) < fabs(pWinnerHit->depth - existingDepth))
+          {
+            pWinnerHit = pHit;
+            evalSampleCache = ((float *)evalData.data()) + evalSampleCacheData.size() * 4 * i;
+          }
+        }
+        else if(depthFunc == D3D12_COMPARISON_FUNC_ALWAYS ||
+                depthFunc == D3D12_COMPARISON_FUNC_NEVER ||
+                depthFunc == D3D12_COMPARISON_FUNC_NOT_EQUAL)
+        {
+          // For depth functions without a sensible comparison, use the last sample encountered
           pWinnerHit = pHit;
           evalSampleCache = ((float *)evalData.data()) + evalSampleCacheData.size() * 4 * i;
         }

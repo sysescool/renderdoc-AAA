@@ -493,15 +493,15 @@ void WrappedVulkan::SubmitAndFlushImageStateBarriers(ImageBarrierSequence &barri
 
   VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
                                         VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
-  VkFence queueFamilyFences[ImageBarrierSequence::MAX_QUEUE_FAMILY_COUNT] = {
-      VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+  rdcarray<VkFence> queueFamilyFences;
   rdcarray<VkFence> submittedFences;
   rdcarray<VkImageMemoryBarrier> batch;
+
   VkResult vkr;
   for(uint32_t batchIndex = 0; batchIndex < ImageBarrierSequence::MAX_BATCH_COUNT; ++batchIndex)
   {
     for(uint32_t queueFamilyIndex = 0;
-        queueFamilyIndex < ImageBarrierSequence::MAX_QUEUE_FAMILY_COUNT; ++queueFamilyIndex)
+        queueFamilyIndex < ImageBarrierSequence::GetMaxQueueFamilyIndex(); ++queueFamilyIndex)
     {
       barriers.ExtractUnwrappedBatch(batchIndex, queueFamilyIndex, batch);
       if(batch.empty())
@@ -549,6 +549,7 @@ void WrappedVulkan::SubmitAndFlushImageStateBarriers(ImageBarrierSequence &barri
       vkr = ObjDisp(cmd)->EndCommandBuffer(Unwrap(cmd));
       CheckVkResult(vkr);
 
+      queueFamilyFences.resize_for_index(queueFamilyIndex);
       VkFence &fence = queueFamilyFences[queueFamilyIndex];
       if(fence == VK_NULL_HANDLE)
       {
@@ -578,12 +579,9 @@ void WrappedVulkan::SubmitAndFlushImageStateBarriers(ImageBarrierSequence &barri
       submittedFences.clear();
     }
   }
-  for(uint32_t queueFamilyIndex = 0;
-      queueFamilyIndex < ImageBarrierSequence::MAX_QUEUE_FAMILY_COUNT; ++queueFamilyIndex)
-  {
-    if(queueFamilyFences[queueFamilyIndex] != VK_NULL_HANDLE)
-      ObjDisp(m_Device)->DestroyFence(Unwrap(m_Device), queueFamilyFences[queueFamilyIndex], NULL);
-  }
+
+  for(VkFence fence : queueFamilyFences)
+    ObjDisp(m_Device)->DestroyFence(Unwrap(m_Device), fence, NULL);
 }
 
 void WrappedVulkan::InlineSetupImageBarriers(VkCommandBuffer cmd, ImageBarrierSequence &barriers)
@@ -1005,6 +1003,9 @@ static const VkExtensionProperties supportedExtensions[] = {
     {
         VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME,
         VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_SPEC_VERSION,
+    },
+    {
+        VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME, VK_EXT_MUTABLE_DESCRIPTOR_TYPE_SPEC_VERSION,
     },
     {
         VK_EXT_PCI_BUS_INFO_EXTENSION_NAME, VK_EXT_PCI_BUS_INFO_SPEC_VERSION,
@@ -1499,6 +1500,9 @@ static const VkExtensionProperties supportedExtensions[] = {
     },
     {
         VK_QCOM_RENDER_PASS_STORE_OPS_EXTENSION_NAME, VK_QCOM_RENDER_PASS_STORE_OPS_SPEC_VERSION,
+    },
+    {
+        VK_VALVE_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME, VK_VALVE_MUTABLE_DESCRIPTOR_TYPE_SPEC_VERSION,
     },
 };
 
@@ -3821,7 +3825,7 @@ void WrappedVulkan::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
 
     VkResult vkr = VK_SUCCESS;
 
-    bool rpWasActive = false;
+    bool rpWasActive[2] = {};
 
     // we'll need our own command buffer if we're replaying just a subsection
     // of events within a single command buffer record - always if it's only
@@ -3850,9 +3854,10 @@ void WrappedVulkan::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
       m_RenderState.subpassContents = VK_SUBPASS_CONTENTS_INLINE;
       m_RenderState.dynamicRendering.flags &= ~VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
 
-      rpWasActive = m_Partial[Primary].renderPassActive;
+      rpWasActive[Primary] = m_Partial[Primary].renderPassActive;
+      rpWasActive[Secondary] = m_Partial[Secondary].renderPassActive;
 
-      if(m_Partial[Primary].renderPassActive)
+      if(rpWasActive[Primary] || rpWasActive[Secondary])
       {
         const ActionDescription *action = GetAction(endEventID);
 
@@ -3928,13 +3933,14 @@ void WrappedVulkan::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
       // even if it wasn't before (if the above event was a CmdBeginRenderPass).
       // If we began our own custom single-action loadrp, and it was ended by a CmdEndRenderPass,
       // we need to reverse the virtual transitions we did above, as it won't happen otherwise
-      if(m_Partial[Primary].renderPassActive)
+      if(m_Partial[Primary].renderPassActive || m_Partial[Secondary].renderPassActive)
         m_RenderState.EndRenderPass(cmd);
 
       // we might have replayed a CmdBeginRenderPass or CmdEndRenderPass,
       // but we want to keep the partial replay data state intact, so restore
       // whether or not a render pass was active.
-      m_Partial[Primary].renderPassActive = rpWasActive;
+      m_Partial[Primary].renderPassActive = rpWasActive[Primary];
+      m_Partial[Secondary].renderPassActive = rpWasActive[Secondary];
 
       ObjDisp(cmd)->EndCommandBuffer(Unwrap(cmd));
 
@@ -4736,16 +4742,8 @@ void WrappedVulkan::AddUsage(VulkanActionTreeNode &actionNode, rdcarray<DebugMes
           continue;
         }
 
-        // handled as part of the framebuffer attachments
-        if(layout.bindings[bind].descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
-          continue;
-
-        // we don't mark samplers with usage
-        if(layout.bindings[bind].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER)
-          continue;
-
         // no object to mark for usage with inline blocks
-        if(layout.bindings[bind].descriptorType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+        if(layout.bindings[bind].layoutDescType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
           continue;
 
         ResourceUsage usage = ResourceUsage(uint32_t(types[t].usage) + shad);
@@ -4779,30 +4777,41 @@ void WrappedVulkan::AddUsage(VulkanActionTreeNode &actionNode, rdcarray<DebugMes
 
           DescriptorSetSlot &slot = descset.data.binds[bind][a];
 
+          // handled as part of the framebuffer attachments
+          if(slot.type == DescriptorSlotType::InputAttachment)
+            continue;
+
+          // ignore unwritten descriptors
+          if(slot.type == DescriptorSlotType::Unwritten)
+            continue;
+
+          // we don't mark samplers with usage
+          if(slot.type == DescriptorSlotType::Sampler)
+            continue;
+
           ResourceId id;
 
-          switch(layout.bindings[bind].descriptorType)
+          switch(slot.type)
           {
-            case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-              if(slot.imageInfo.imageView != ResourceId())
-                id = c.m_ImageView[slot.imageInfo.imageView].image;
+            case DescriptorSlotType::CombinedImageSampler:
+            case DescriptorSlotType::SampledImage:
+            case DescriptorSlotType::StorageImage:
+              if(slot.resource != ResourceId())
+                id = c.m_ImageView[slot.resource].image;
               break;
-            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-              if(slot.texelBufferView != ResourceId())
-                id = c.m_BufferView[slot.texelBufferView].buffer;
+            case DescriptorSlotType::UniformTexelBuffer:
+            case DescriptorSlotType::StorageTexelBuffer:
+              if(slot.resource != ResourceId())
+                id = c.m_BufferView[slot.resource].buffer;
               break;
-            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
-              if(slot.bufferInfo.buffer != ResourceId())
-                id = slot.bufferInfo.buffer;
+            case DescriptorSlotType::UniformBuffer:
+            case DescriptorSlotType::UniformBufferDynamic:
+            case DescriptorSlotType::StorageBuffer:
+            case DescriptorSlotType::StorageBufferDynamic:
+              if(slot.resource != ResourceId())
+                id = slot.resource;
               break;
-            case VK_DESCRIPTOR_TYPE_MAX_ENUM: break;
-            default: RDCERR("Unexpected type %d", layout.bindings[bind].descriptorType); break;
+            default: RDCERR("Unexpected type %d", slot.type); break;
           }
 
           if(id != ResourceId())
