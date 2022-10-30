@@ -8,6 +8,8 @@ Development64/
 Release32/
 Release64/
 build/
+build_android_*/
+build_script/envsetup.sh
 build-*/
 /dist/
 /package/
